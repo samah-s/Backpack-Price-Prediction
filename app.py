@@ -34,7 +34,7 @@ allowed_values = {
     "Size": ["Small", "Medium", "Large"],
     "Laptop Compartment": ["Yes", "No"],
     "Waterproof": ["Yes", "No"],
-    "Style": ["Backpack", "Tote", "Messenger"],
+    "Style": ["Backpack"],
     "Color": ["Black", "Blue", "Pink","Red", "Green", "Grey"]
 }
 
