@@ -3,58 +3,72 @@ from PIL import Image
 import joblib
 import pandas as pd
 import numpy as np
-from transformers import BlipProcessor, BlipForConditionalGeneration
 import torch
+from torchvision import transforms
+from transformers import CLIPProcessor, CLIPModel
 
 # Load model and preprocessors
-
 model = joblib.load("artifact/model.pkl")
 indexers = joblib.load("artifact/indexers.pkl")
 columns = joblib.load("artifact/columns.pkl")
 standard_scaler = joblib.load("artifact/scaler_std.pkl")
 minmax_scaler = joblib.load("artifact/scaler_minmax.pkl")
 
-# Load BLIP model for feature extraction
+# Load CLIP model
 @st.cache_resource
-def load_blip_model():
-    processor = BlipProcessor.from_pretrained("Salesforce/blip-image-captioning-base")
-    model = BlipForConditionalGeneration.from_pretrained("Salesforce/blip-image-captioning-base")
-    return processor, model
+def load_clip_model():
+    model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32")
+    processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
+    return model, processor
 
-processor, blip_model = load_blip_model()
+clip_model, clip_processor = load_clip_model()
 
-st.title("🎒 Backpack Price Predictor")
+st.title("🎒 Backpack Price Predictor ")
 
 uploaded_file = st.file_uploader("Upload an image of a backpack", type=["jpg", "jpeg", "png"])
+
+# Reference samples (you'll need to store representative images for each class)
+allowed_values = {
+    "Brand": ["Nike", "Jansport", "Puma", "Under Armour"],
+    "Material": ["Polyester", "Nylon", "Leather"],
+    "Size": ["Small", "Medium", "Large"],
+    "Laptop Compartment": ["Yes", "No"],
+    "Waterproof": ["Yes", "No"],
+    "Style": ["Backpack", "Tote", "Messenger"],
+    "Color": ["Black", "Blue", "Pink","Red", "Green", "Grey"]
+}
+
+# You should place reference images in a folder like 'ref_images/<Attribute>/<Value>.jpg'
+def get_best_match(image, attribute):
+    texts = [f"{value} backpack" for value in allowed_values[attribute]]
+    inputs = clip_processor(text=texts, images=image, return_tensors="pt", padding=True)
+    outputs = clip_model(**inputs)
+    logits_per_image = outputs.logits_per_image
+    probs = logits_per_image.softmax(dim=1).detach().numpy()[0]
+    return allowed_values[attribute][np.argmax(probs)]
 
 if uploaded_file:
     image = Image.open(uploaded_file).convert("RGB")
     st.image(image, caption="Uploaded Image", use_column_width=True)
 
-    # Extract caption from image using BLIP
-    st.subheader("🔍 Extracting Features using BLIP...")
-    inputs = processor(image, return_tensors="pt")
-    out = blip_model.generate(**inputs)
-    caption = processor.decode(out[0], skip_special_tokens=True)
-    st.write(f"**BLIP Caption**: _{caption}_")
+    st.subheader("🧠 Predicting Features from Image (using CLIP)")
 
-    # Simple parsing - adjust as needed
     extracted = {
-        "Weight Capacity (kg)": 24.0,  # Default or use some heuristic
-        "Brand": "Nike" if "nike" in caption.lower() else "Unknown",
-        "Material": "Polyester" if "polyester" in caption.lower() else "Nylon",
-        "Size": "Medium",
-        "Compartments": 2,
-        "Laptop Compartment": "Yes" if "laptop" in caption.lower() else "No",
-        "Waterproof": "Yes" if "waterproof" in caption.lower() else "No",
-        "Style": "Backpack",
-        "Color": "Black" if "black" in caption.lower() else "Blue"
+        "Weight Capacity (kg)": 7.5 if get_best_match(image, "Size")=="Small" else (16.5 if get_best_match(image, "Size")=="Medium" else 24.0),
+        "Brand": get_best_match(image, "Brand"),
+        "Material": get_best_match(image, "Material"),
+        "Size": get_best_match(image, "Size"),
+        "Compartments": 2 if get_best_match(image, "Size")=="Small" else (4 if get_best_match(image, "Size")=="Medium" else 6),
+        "Laptop Compartment": get_best_match(image, "Laptop Compartment"),
+        "Waterproof": get_best_match(image, "Waterproof"),
+        "Style": get_best_match(image, "Style"),
+        "Color": get_best_match(image, "Color"),
     }
 
     st.subheader("📋 Extracted Features")
     st.json(extracted)
 
-    # Create DataFrame
+    # Same preprocessing and prediction pipeline as before
     df = pd.DataFrame([extracted])
     df["Weight Capacity (kg)"] = df["Weight Capacity (kg)"].astype(np.float32)
 
@@ -79,7 +93,6 @@ if uploaded_file:
             df[col] = 0
     df = df[columns]
 
-    # Categorical pair encodings
     CATS = ['Brand', 'Material', 'Size', 'Compartments', 'Laptop Compartment', 'Waterproof', 'Style', 'Color']
     for i, c1 in enumerate(CATS[:-1]):
         for c2 in CATS[i + 1:]:
@@ -98,6 +111,5 @@ if uploaded_file:
     df.fillna(0, inplace=True)
     df.replace([np.inf, -np.inf], 0, inplace=True)
 
-    # Predict
     predicted_price = model.predict(df)[0]
     st.success(f"💰 **Predicted Price**: ${predicted_price:.2f}")
